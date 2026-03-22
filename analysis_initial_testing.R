@@ -70,7 +70,7 @@ untouchables <- df |>
   mutate(is_team_leader = (pts == max(pts))) |>
   ungroup() |>
   filter(pts_rank <= 15 | plus_minus_rank <= 15 | age >= 35 | is_team_leader ) |>
-  pull(player_name) |>
+  pull(player_id,) |>
   unique()
 
 untouchables
@@ -79,7 +79,7 @@ untouchables
 player_pool <- df |> 
   # distinct(player_name, team_abbr, pts, reb, stl, blk, fg3m, ast, offtov, min) |> 
   # filter(!(player_name %in% untouchables)) |>  # remove untouchables
-  filter(!(player_name %in% untouchables)) |> 
+  filter(!(player_id %in% untouchables)) |> 
   group_by(player_name, team_abbr) |> 
   summarise(
     # Totaling stats first ensures we have one unique row per player
@@ -184,3 +184,6 @@ cor_matrix <- team_analysis %>%
   fashion()   # Formats numbers for easy reading
 
 print(cor_matrix)
+
+
+write.csv(untouchables, "untouchables.csv", row.names = FALSE)

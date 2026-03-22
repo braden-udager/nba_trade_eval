@@ -5,16 +5,18 @@ library(DT)
 library(bslib)
 
 # -------------------------------------------------------------------------
-# GLOBAL FUNCTIONS & SETUP
+# GLOBAL FUNCTIONS
 # -------------------------------------------------------------------------
 find_prospects <- function(need_cat, current_team, team_z, pool) {
+  if (is.null(pool) || nrow(pool) == 0) return("No players available")
+  
   player_stat_col <- case_when(
-    need_cat == "z_off" ~ "pz_off",
+    need_cat == "z_off"   ~ "pz_off",
     need_cat == "z_perim" ~ "pz_perim",
     need_cat == "z_inter" ~ "pz_inter",
-    need_cat == "z_reb" ~ "pz_reb",
-    need_cat == "z_3pt" ~ "pz_3pt",
-    need_cat == "z_ast" ~ "pz_ast"
+    need_cat == "z_reb"   ~ "pz_reb",
+    need_cat == "z_3pt"   ~ "pz_3pt",
+    need_cat == "z_ast"   ~ "pz_ast"
   )
   
   prospects <- pool |> 
@@ -34,13 +36,8 @@ find_prospects <- function(need_cat, current_team, team_z, pool) {
     ) |> 
     pull(label)
   
-  if(length(prospects) == 0) {
-    prospects_out <- "No targets identified" 
-  } else {
-    prospects_out <- paste(prospects, collapse = "")
-  }
-  
-  return(prospects_out)
+  if(length(prospects) == 0) return("No targets identified")
+  paste(prospects, collapse = "")
 }
 
 # -------------------------------------------------------------------------
@@ -97,172 +94,114 @@ ui <- page_sidebar(
 # -------------------------------------------------------------------------
 server <- function(input, output, session) {
   
-  # 1. Load Data
   raw_data <- reactive({
     req(file.exists("df_FINAL.csv")) 
     read_csv("df_FINAL.csv", show_col_types = FALSE)
   })
-  
-  # 2. Preset Logic
-  presets <- list(
-    "Balanced"         = c(5, 5, 5, 5, 5, 5),
-    "Small Ball"       = c(7, 8, 2, 2, 10, 9),
+
+  # Preset Logic - Matches your script values
+  observeEvent(input$preset, {
+    if (input$preset == "Custom") return()
+    presets <- list(
+      "Balanced"     = c(5, 5, 5, 5, 5, 5),
+      "Small Ball"       = c(7, 8, 2, 2, 10, 9),
     "Lockdown Defense" = c(3, 10, 10, 7, 3, 4),
     "Pure Scoring"     = c(10, 3, 2, 3, 9, 7),
     "Glass Cleaners"   = c(4, 4, 8, 10, 4, 4)
-  )
-  
-  observeEvent(input$preset, {
-    if (input$preset == "Custom") return()
-    vals <- presets[[input$preset]]
-    updateSliderInput(session, "w_off", value = vals[1])
-    updateSliderInput(session, "w_perim", value = vals[2])
-    updateSliderInput(session, "w_inter", value = vals[3])
-    updateSliderInput(session, "w_reb", value = vals[4])
-    updateSliderInput(session, "w_3pt", value = vals[5])
-    updateSliderInput(session, "w_ast", value = vals[6])
-  })
-  
-  observe({
-    current_vals <- c(input$w_off, input$w_perim, input$w_inter, input$w_reb, input$w_3pt, input$w_ast)
-    isolate({
-      if (input$preset != "Custom") {
-        target_vals <- presets[[input$preset]]
-        if (!isTRUE(all.equal(current_vals, target_vals))) {
-          updateSelectInput(session, "preset", selected = "Custom")
-        }
-      }
-    })
-  })
-  
-  observeEvent(input$reset_weights, {
-    updateSelectInput(session, "preset", selected = "Balanced")
-  })
-  
-  # 3. Dynamic Normalized Weights
-  category_weights <- reactive({
-    raw_vals <- c(z_off = input$w_off, z_perim = input$w_perim, z_inter = input$w_inter, 
-                  z_reb = input$w_reb, z_3pt = input$w_3pt, z_ast = input$w_ast)
-    total <- sum(raw_vals)
-    norm_vals <- if(total == 0) rep(1/6, 6) else raw_vals / total
-    tibble(
-      category = names(raw_vals),
-      weight = norm_vals,
-      label = c("Offense", "Perim Def", "Inter Def", "Reb", "3PT", "PG Play")
     )
+    v <- presets[[input$preset]]
+    updateSliderInput(session, "w_off", value=v[1]); updateSliderInput(session, "w_perim", value=v[2])
+    updateSliderInput(session, "w_inter", value=v[3]); updateSliderInput(session, "w_reb", value=v[4])
+    updateSliderInput(session, "w_3pt", value=v[5]); updateSliderInput(session, "w_ast", value=v[6])
+  })
+
+  category_weights <- reactive({
+    vals <- c(z_off=input$w_off, z_perim=input$w_perim, z_inter=input$w_inter, 
+              z_reb=input$w_reb, z_3pt=input$w_3pt, z_ast=input$w_ast)
+    total <- sum(vals)
+    norm <- if(total==0) rep(1/6, 6) else vals/total
+    tibble(category=names(vals), weight=norm, label=c("Offense", "Perim Def", "Inter Def", "Reb", "3PT", "PG Play"))
+  })
+
+  # Team Analysis Logic from analysis_initial_testing.R
+  team_analysis <- reactive({
+    cw <- category_weights()
+    raw_data() |> 
+      distinct(team_abbr, lineup, minutes, off_pts, deftov, defts, offorb, deforb, off_3pt, ast, offtov) |> 
+      group_by(team_abbr) |> 
+      summarise(
+        avg_off = weighted.mean(off_pts, minutes),
+        avg_perim = weighted.mean(deftov, minutes), 
+        avg_int = weighted.mean(defts, minutes),
+        avg_reb = weighted.mean(offorb + deforb, minutes),
+        avg_3pt = weighted.mean(off_3pt, minutes),
+        avg_ast = weighted.mean(ast - offtov, minutes), .groups="drop"
+      ) |>
+      mutate(across(c(avg_off, avg_perim, avg_int, avg_reb, avg_3pt, avg_ast), ~as.numeric(scale(.x)), .names = "z_{.col}")) |>
+      rename(z_off=z_avg_off, z_perim=z_avg_perim, z_inter=z_avg_int, z_reb=z_avg_reb, z_3pt=z_avg_3pt, z_ast=z_avg_ast) |>
+      pivot_longer(cols=starts_with("z_"), names_to="category", values_to="perf_z") |>
+      left_join(cw, by="category") |>
+      mutate(weighted_need = (-perf_z) * weight,
+             need_label = case_when(
+               category=="z_off"~"Scoring/Offense", category=="z_perim"~"Perimeter Defense", 
+               category=="z_inter"~"Interior Defense", category=="z_reb"~"Rebounding", 
+               category=="z_3pt"~"3pt Shooting", category=="z_ast"~"Point Guard Play"))
+  })
+
+  team_trade_summary <- reactive({
+    team_analysis() |> 
+      group_by(team_abbr) |>
+      summarise(need_urgency = round(sum(weighted_need), 3), 
+                top_need = need_label[which.max(-perf_z)], # Matches script: which.max(need_score)
+                top_need_cat = category[which.max(-perf_z)], 
+                team_baseline_z = perf_z[which.max(-perf_z)], .groups="drop")
+  })
+
+  # Fixed Player Pool - Matches script "Untouchables" logic
+  player_pool <- reactive({
+    df <- raw_data()
+    
+    untouchable_ids <- df |>
+      filter(!duplicated(player_id)) |>
+      group_by(team_abbr) |>
+      mutate(is_team_leader = (pts == max(pts))) |>
+      ungroup() |>
+      filter(pts_rank <= 15 | plus_minus_rank <= 15 | age >= 35 | is_team_leader) |>
+      pull(player_id) |> unique()
+
+    df |> 
+      filter(!(player_id %in% untouchable_ids)) |> 
+      group_by(player_id, player_name, team_abbr) |> 
+      summarise(across(c(pts, reb, stl, blk, fg3m, ast, offtov, min), sum, na.rm = TRUE), .groups = "drop") |>
+      filter(min > 50) |>
+      mutate(
+        pz_off   = as.numeric(scale(pts/min)), 
+        pz_reb   = as.numeric(scale(reb/min)), 
+        pz_perim = as.numeric(scale(stl/min)),
+        pz_inter = as.numeric(scale(blk/min)), 
+        pz_3pt   = as.numeric(scale(fg3m/min)), 
+        # Matches script pz_ast calculation
+        pz_ast   = (as.numeric(scale(ast/min)) + (as.numeric(scale(offtov/min)) * -1)) / 2
+      )
+  })
+
+  output$trade_table <- renderDT({
+    pool <- player_pool()
+    report <- team_trade_summary() |> 
+      rowwise() |> 
+      mutate(trade_targets = find_prospects(top_need_cat, team_abbr, team_baseline_z, pool)) |> 
+      ungroup() |> 
+      select(team_abbr, need_urgency, top_need, trade_targets) |> 
+      arrange(desc(need_urgency))
+    
+    datatable(report, options = list(pageLength = 30), rownames = FALSE, escape = FALSE)
   })
   
   output$weight_display <- renderUI({
     w <- category_weights()
     tags$div(style = "font-size: 0.85em; color: #555;",
-             lapply(1:nrow(w), function(i) {
-               tags$div(tags$span(style="float:left;", w$label[i]),
-                        tags$span(style="float:right; font-weight:bold;", paste0(round(w$weight[i]*100, 1), "%")),
-                        tags$br())
-             })
-    )
-  })
-  
-  # 4. Processing Logic
-  team_performance <- reactive({
-    raw_data() |> 
-      distinct(team_abbr, lineup, minutes, off_pts, def_pts, offorb, deforb, off_3pt, deftov, defts, ast, offtov) |> 
-      group_by(team_abbr) |> 
-      summarise(across(c(off_pts, deftov, defts, offorb, deforb, off_3pt, ast, offtov), 
-                       ~weighted.mean(.x, minutes, na.rm=TRUE)), .groups = "drop") |>
-      mutate(avg_reb_rate = offorb + deforb, avg_pointplay = ast - offtov)
-  })
-  
-  team_analysis <- reactive({
-    
-    team_performance() |> 
-      mutate(across(c(off_pts, deftov, defts, avg_reb_rate, off_3pt, avg_pointplay), 
-                    ~as.numeric(scale(.x)), .names = "z_{.col}")) |>
-      rename(z_off = z_off_pts, z_perim = z_deftov, z_inter = z_defts, z_reb = z_avg_reb_rate, z_3pt = z_off_3pt, z_ast = z_avg_pointplay) |>
-      pivot_longer(cols = starts_with("z_"), names_to = "category", values_to = "perf_z") |> 
-      left_join(category_weights(), by = "category") |> 
-      mutate(need_score = -perf_z, 
-             weighted_need = need_score * weight,
-             need_label = case_when(category == "z_off" ~ "Scoring/Offense", category == "z_perim" ~ "Perimeter Defense",
-                                    category == "z_inter" ~ "Interior Defense", category == "z_reb" ~ "Rebounding",
-                                    category == "z_3pt" ~ "3pt Shooting", category == "z_ast" ~ "Point Guard Play"))
-  })
-  
-  team_trade_summary <- reactive({
-    team_analysis() |> group_by(team_abbr) |> 
-      summarise(need_urgency = round(sum(weighted_need), 3), top_need = need_label[which.max(weighted_need)],
-                top_need_cat = category[which.max(weighted_need)], team_baseline_z = perf_z[which.max(weighted_need)], .groups = "drop")
-  })
-  
-  player_pool <- reactive({
-    df <- raw_data()
-    untouchables <- df |> group_by(team_abbr) |> filter(pts == max(pts, na.rm=TRUE) | pts_rank <= 15) |> pull(player_name) |> unique()
-    df |> filter(!(player_name %in% untouchables)) |>  
-      group_by(player_id, player_name, team_abbr) |> 
-      summarise(across(c(pts, reb, stl, blk, fg3m, ast, offtov, min), sum, na.rm = TRUE), .groups = "drop") |>
-      mutate(pz_off = as.numeric(scale(pts/min)), pz_reb = as.numeric(scale(reb/min)), pz_perim = as.numeric(scale(stl/min)),
-             pz_inter = as.numeric(scale(blk/min)), pz_3pt = as.numeric(scale(fg3m/min)), pz_ast = as.numeric(scale((ast-offtov)/min)))
-  })
-  
-  final_trade_report <- reactive({
-    pool <- player_pool()
-    report <- team_trade_summary() |> rowwise() |> 
-      mutate(trade_targets = find_prospects(top_need_cat, team_abbr, team_baseline_z, pool)) |> ungroup() |> 
-      select(team_abbr, need_urgency, top_need, trade_targets) |> arrange(desc(need_urgency))
-    if (input$filter_need != "All") report <- report |> filter(top_need == input$filter_need)
-    report
-  })
-  
-  # 5. Render Outputs
-  output$trade_table <- renderDT({
-    datatable(final_trade_report(), options = list(paging = FALSE), rownames = FALSE, escape = FALSE)
-  })
-  
-  # CORRELATION MATRIX CALCULATIONS
-  cor_data <- reactive({
-    team_analysis() |>
-      select(team_abbr, category, weighted_need) |>
-      pivot_wider(names_from = category, values_from = weighted_need) |>
-      select(-team_abbr) |> 
-      correlate(quiet = TRUE)
-  })
-  
-  # FIXED CORRELATION PLOT: Upper Triangular Heatmap Tiles
-  output$cor_plot <- renderPlot({
-    cd <- cor_data()
-    
-    # Human-readable labels for the plot
-    cat_map <- c("z_off" = "Offense", "z_perim" = "Perim Def", "z_inter" = "Inter Def", 
-                 "z_reb" = "Rebounding", "z_3pt" = "3PT", "z_ast" = "PG Play")
-    
-    long_cor <- cd |> 
-      pivot_longer(-term, names_to = "variable", values_to = "correlation") |>
-      filter(!is.na(correlation)) |>
-      mutate(
-        term = factor(term, levels = names(cat_map), labels = cat_map),
-        variable = factor(variable, levels = names(cat_map), labels = cat_map)
-      ) |>
-      # Filter for Upper Triangular logic (Row index < Col index)
-      filter(as.numeric(term) < as.numeric(variable))
-    
-    ggplot(long_cor, aes(x = variable, y = term, fill = correlation)) +
-      geom_tile(color = "white") +
-      geom_text(aes(label = sprintf("%.2f", correlation)), color = "black", size = 4) +
-      scale_fill_gradient2(low = "#e67e22", mid = "white", high = "#2ecc71", 
-                           midpoint = 0, limit = c(-1, 1), name="Correlation") +
-      theme_minimal() +
-      theme(
-        axis.title = element_blank(),
-        panel.grid = element_blank(),
-        axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1),
-        legend.position = "right"
-      ) +
-      coord_fixed()
-  })
-  
-  output$cor_matrix_text <- renderPrint({
-    cor_data() |> shave() |> fashion()
+             lapply(1:6, function(i) tags$div(tags$span(w$label[i]), tags$span(style="float:right; font-weight:bold;", paste0(round(w$weight[i]*100, 1), "%")), tags$br())))
   })
 }
 
-shinyApp(ui = ui, server = server)
+shinyApp(ui, server)
