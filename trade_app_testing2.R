@@ -102,11 +102,17 @@ server <- function(input, output, session) {
     "Lockdown Defense" = c(3, 10, 10, 7, 3, 4),
     "Pure Scoring"     = c(10, 3, 2, 3, 9, 7),
     "Glass Cleaners"   = c(4, 4, 8, 10, 4, 4)
-    )
-    v <- presets[[input$preset]]
-    updateSliderInput(session, "w_off", value=v[1]); updateSliderInput(session, "w_perim", value=v[2])
-    updateSliderInput(session, "w_inter", value=v[3]); updateSliderInput(session, "w_reb", value=v[4])
-    updateSliderInput(session, "w_3pt", value=v[5]); updateSliderInput(session, "w_ast", value=v[6])
+  )
+  
+  observeEvent(input$preset, {
+    if (input$preset == "Custom") return()
+    vals <- presets[[input$preset]]
+    updateSliderInput(session, "w_off", value = vals[1])
+    updateSliderInput(session, "w_perim", value = vals[2])
+    updateSliderInput(session, "w_inter", value = vals[3])
+    updateSliderInput(session, "w_reb", value = vals[4])
+    updateSliderInput(session, "w_3pt", value = vals[5])
+    updateSliderInput(session, "w_ast", value = vals[6])
   })
   
   observe({
