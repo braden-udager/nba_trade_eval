@@ -79,8 +79,12 @@ ui <- page_sidebar(
   ),
   navset_card_underline(
     nav_panel("Trade Report", DTOutput("trade_table")),
-    nav_panel("Correlation", plotOutput("cor_plot")),
-    nav_panel("Trade Deadline Comparison", DTOutput("deadline_results"))
+    nav_panel("Trade Deadline Comparison", DTOutput("deadline_results")),
+    nav_panel("Correlation Analysis", 
+              plotOutput("cor_plot", height = "500px"), # Slightly taller for heatmap
+              hr(),
+              h5("Correlation Matrix"),
+              verbatimTextOutput("cor_matrix_text"))
   )
 )
 
@@ -299,27 +303,58 @@ output$deadline_results <- renderDT({
             escape = FALSE)
 })
 
-  # Correlation matrix for the Correlation tab
+  # FIXED CORRELATION PLOT: Upper Triangular Heatmap Tiles
+ # CORRELATION MATRIX CALCULATIONS
   cor_data <- reactive({
     team_analysis() |>
       select(team_abbr, category, weighted_need) |>
       pivot_wider(names_from = category, values_from = weighted_need) |>
-      select(-team_abbr) |>
+      select(-team_abbr) |> 
       correlate(quiet = TRUE)
   })
-
+  
+  # FIXED CORRELATION PLOT: Upper Triangular Heatmap Tiles
   output$cor_plot <- renderPlot({
-    cor_data() |>
-      rplot() +
+    cd <- cor_data()
+    
+    # Human-readable labels for the plot
+    cat_map <- c("z_off" = "Offense", "z_perim" = "Perim Def", "z_inter" = "Inter Def", 
+                 "z_reb" = "Rebounding", "z_3pt" = "3PT", "z_ast" = "PG Play")
+    
+    long_cor <- cd |> 
+      pivot_longer(-term, names_to = "variable", values_to = "correlation") |>
+      filter(!is.na(correlation)) |>
+      mutate(
+        term = factor(term, levels = names(cat_map), labels = cat_map),
+        variable = factor(variable, levels = names(cat_map), labels = cat_map)
+      ) |>
+      # Filter for Upper Triangular logic (Row index < Col index)
+      filter(as.numeric(term) < as.numeric(variable))
+    
+    ggplot(long_cor, aes(x = variable, y = term, fill = correlation)) +
+      geom_tile(color = "white") +
+      geom_text(aes(label = sprintf("%.2f", correlation)), color = "black", size = 4) +
+      scale_fill_gradient2(low = "#e67e22", mid = "white", high = "#2ecc71", 
+                           midpoint = 0, limit = c(-1, 1), name="Correlation") +
       theme_minimal() +
-      labs(title = "Category Needs Correlation Network")
+      theme(
+        axis.title = element_blank(),
+        panel.grid = element_blank(),
+        axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1),
+        legend.position = "right"
+      ) +
+      coord_fixed()
   })
-
+  
+  output$cor_matrix_text <- renderPrint({
+    cor_data() |> shave() |> fashion()
+  })
 }
 
 shinyApp(ui, server)
 
-# Nothing is appearing in Correlation Tab
+# Fixed Correlation Tab
 
 # Ochai Agbaji appearing twice
 # Ousmane Dieng Not appearing due to being an untouchable
+
