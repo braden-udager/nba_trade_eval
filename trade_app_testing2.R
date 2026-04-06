@@ -17,7 +17,7 @@ find_prospects <- function(need_cat, current_team, team_z, pool) {
   player_stat_col <- case_when(
     need_cat == "z_off"   ~ "pz_off",
     need_cat == "z_perim" ~ "pz_perim",
-    need_cat == "z_inter" ~ "pz_inter",
+    need_cat == "z_int" ~ "pz_int",
     need_cat == "z_reb"   ~ "pz_reb",
     need_cat == "z_3pt"   ~ "pz_3pt",
     need_cat == "z_ast"   ~ "pz_ast",
@@ -50,7 +50,7 @@ find_prospects <- function(need_cat, current_team, team_z, pool) {
 metric_choices <- list(
   "Offense" = "z_off",
   "Perimeter Defense" = "z_perim",
-  "Interior Defense" = "z_inter",
+  "Interior Defense" = "z_int",
   "Rebounding" = "z_reb",
   "3PT Shooting" = "z_3pt",
   "Point Guard Play" = "z_ast"
@@ -73,7 +73,7 @@ ui <- page_sidebar(
     h5("Category Importance (0-10)"),
     sliderInput("w_off", "Offense", min = 0, max = 10, value = 5, step = 1),
     sliderInput("w_perim", "Perimeter Defense", min = 0, max = 10, value = 5, step = 1),
-    sliderInput("w_inter", "Interior Defense", min = 0, max = 10, value = 5, step = 1),
+    sliderInput("w_int", "Interior Defense", min = 0, max = 10, value = 5, step = 1),
     sliderInput("w_reb", "Rebounding", min = 0, max = 10, value = 5, step = 1),
     sliderInput("w_3pt", "3PT Shooting", min = 0, max = 10, value = 5, step = 1),
     sliderInput("w_ast", "Point Guard Play", min = 0, max = 10, value = 5, step = 1),
@@ -97,10 +97,7 @@ ui <- page_sidebar(
     nav_panel("Trade Report", DTOutput("trade_table")),
     nav_panel("Trade Deadline Comparison", DTOutput("deadline_results")),
     nav_panel("Correlation Analysis", 
-              plotOutput("cor_plot", height = "500px"), # Slightly taller for heatmap
-              hr(),
-              h5("Correlation Matrix"),
-              verbatimTextOutput("cor_matrix_text")),
+              plotlyOutput("cor_plot", height = "500px")), # Slightly taller for heatmap
     nav_panel("League Distributions", 
               card(
                 card_header("Team Performance Distributions"),
@@ -137,8 +134,9 @@ server <- function(input, output, session) {
         avg_reb = weighted.mean(offorb + deforb, minutes),
         avg_3pt = weighted.mean(off_3pt, minutes),
         avg_ast = weighted.mean(ast - offtov, minutes), .groups="drop"
-      ) |>
-      mutate(across(starts_with("avg_"), ~as.numeric(scale(.x)), .names = "z_{str_remove(.x, 'avg_')}")) |>
+      ) %>%
+      mutate(across(starts_with("avg_"), ~as.numeric(scale(.x)), .names = "z_{.col}")) |>
+      rename_with(~ str_remove(., "avg_"), contains("avg")) |> 
       # This line adds the ESPN logos for the plot!
       mutate(url_team = paste0("https://a.espncdn.com/i/teamlogos/nba/500/", team_abbr, ".png"))
   })
@@ -157,14 +155,14 @@ server <- function(input, output, session) {
     vals <- presets[[input$preset]]
     updateSliderInput(session, "w_off", value = vals[1])
     updateSliderInput(session, "w_perim", value = vals[2])
-    updateSliderInput(session, "w_inter", value = vals[3])
+    updateSliderInput(session, "w_int", value = vals[3])
     updateSliderInput(session, "w_reb", value = vals[4])
     updateSliderInput(session, "w_3pt", value = vals[5])
     updateSliderInput(session, "w_ast", value = vals[6])
   })
   
   observe({
-    current_vals <- c(input$w_off, input$w_perim, input$w_inter, input$w_reb, input$w_3pt, input$w_ast)
+    current_vals <- c(input$w_off, input$w_perim, input$w_int, input$w_reb, input$w_3pt, input$w_ast)
     isolate({
       if (input$preset != "Custom") {
         target_vals <- presets[[input$preset]]
@@ -180,7 +178,7 @@ server <- function(input, output, session) {
   })
 
   category_weights <- reactive({
-    vals <- c(z_off=input$w_off, z_perim=input$w_perim, z_inter=input$w_inter, 
+    vals <- c(z_off=input$w_off, z_perim=input$w_perim, z_int=input$w_int, 
               z_reb=input$w_reb, z_3pt=input$w_3pt, z_ast=input$w_ast)
     total <- sum(vals)
     norm <- if(total==0) rep(1/6, 6) else vals/total
@@ -201,14 +199,16 @@ server <- function(input, output, session) {
         avg_3pt = weighted.mean(off_3pt, minutes),
         avg_ast = weighted.mean(ast - offtov, minutes), .groups="drop"
       ) |>
-      mutate(across(c(avg_off, avg_perim, avg_int, avg_reb, avg_3pt, avg_ast), ~as.numeric(scale(.x)), .names = "z_{.col}")) |>
-      rename(z_off=z_avg_off, z_perim=z_avg_perim, z_inter=z_avg_int, z_reb=z_avg_reb, z_3pt=z_avg_3pt, z_ast=z_avg_ast) |>
+      # mutate(across(c(avg_off, avg_perim, avg_int, avg_reb, avg_3pt, avg_ast), ~as.numeric(scale(.x)), .names = "z_{.col}")) |>
+      # rename(z_off=z_avg_off, z_perim=z_avg_perim, z_inter=z_avg_int, z_reb=z_avg_reb, z_3pt=z_avg_3pt, z_ast=z_avg_ast) |>
+      mutate(across(starts_with("avg_"), ~as.numeric(scale(.x)), .names = "z_{.col}")) |>
+      rename_with(~ str_remove(., "avg_"), contains("avg")) |> 
       pivot_longer(cols=starts_with("z_"), names_to="category", values_to="perf_z") |>
       left_join(cw, by="category") |>
       mutate(weighted_need = (-perf_z) * weight,
              need_label = case_when(
                category=="z_off"~"Scoring/Offense", category=="z_perim"~"Perimeter Defense", 
-               category=="z_inter"~"Interior Defense", category=="z_reb"~"Rebounding", 
+               category=="z_int"~"Interior Defense", category=="z_reb"~"Rebounding", 
                category=="z_3pt"~"3pt Shooting", category=="z_ast"~"Point Guard Play"))
   })
 
@@ -243,7 +243,7 @@ server <- function(input, output, session) {
         pz_off   = as.numeric(scale(pts/min)), 
         pz_reb   = as.numeric(scale(reb/min)), 
         pz_perim = as.numeric(scale(stl/min)),
-        pz_inter = as.numeric(scale(blk/min)), 
+        pz_int = as.numeric(scale(blk/min)), 
         pz_3pt   = as.numeric(scale(fg3m/min)), 
         # Matches script pz_ast calculation
         pz_ast   = (as.numeric(scale(ast/min)) + (as.numeric(scale(offtov/min)) * -1)) / 2
@@ -266,7 +266,7 @@ server <- function(input, output, session) {
       arrange(desc(`Need Urgency`))
     
     datatable(report, 
-              options = list(pageLength = 30, autoWidth = TRUE), 
+              options = list(paging = FALSE, autoWidth = TRUE), 
               rownames = FALSE, 
               escape = FALSE) |>
       formatStyle('Current Team Z', 
@@ -281,14 +281,29 @@ server <- function(input, output, session) {
 
 output$deadline_results <- renderDT({
   # 1. Load trade data and evaluate the player pool reactive
-  df_trades <- read.csv("nba_trades_cleaned.csv")
-  pool_df <- player_pool() 
+  df_trades <- read.csv("nba_trades_cleaned.csv") |> 
+    rename(player_id = playerid)
+  
+  pool_df <- raw_data() |> 
+    group_by(player_id, player_name, team_abbr) |> 
+    summarise(across(c(pts, reb, stl, blk, fg3m, ast, offtov, min), 
+                     sum, na.rm = TRUE), .groups = "drop") |>
+    mutate(
+      pz_off   = as.numeric(scale(pts/min)), 
+      pz_reb   = as.numeric(scale(reb/min)), 
+      pz_perim = as.numeric(scale(stl/min)),
+      pz_int = as.numeric(scale(blk/min)), 
+      pz_3pt   = as.numeric(scale(fg3m/min)), 
+      # Matches script pz_ast calculation
+      pz_ast   = (as.numeric(scale(ast/min)) + (as.numeric(scale(offtov/min)) * -1)) / 2
+    ) |> 
+    filter(!duplicated(player_id))
 
   # 2. Define the lookup map
   stat_lookup <- c(
     "z_off"   = "pz_off",
     "z_perim" = "pz_perim",
-    "z_inter" = "pz_inter",
+    "z_int" = "pz_int",
     "z_reb"   = "pz_reb",
     "z_3pt"   = "pz_3pt",
     "z_ast"   = "pz_ast"
@@ -312,8 +327,8 @@ output$deadline_results <- renderDT({
         df_trades |> 
           dplyr::filter(trade_new_team == team_abbr) |> 
           # Hypothetical Fix 1
-          dplyr::distinct(playerid, .keep_all = TRUE) |>
-          dplyr::inner_join(pool_df, by = c("playerid" = "player_id")) |> 
+          # dplyr::distinct(playerid, .keep_all = TRUE) |>
+          dplyr::left_join(pool_df) |> 
           dplyr::mutate(
             # Use get() to evaluate the string 'col' as a column name
             lift_val = get(col) - base,
@@ -321,7 +336,7 @@ output$deadline_results <- renderDT({
             lift_fmt = sprintf("%+.2f", lift_val),
             label = paste0(
               "<div style='display: inline-block; text-align: center; margin-right: 15px;'>",
-              "<img src='https://cdn.nba.com/headshots/nba/latest/1040x760/", playerid, ".png' ",
+              "<img src='https://cdn.nba.com/headshots/nba/latest/1040x760/", player_id, ".png' ",
               "style='height: 60px; object-fit: cover;' alt='", player, "'><br>",
               "<span style='font-size:0.85em; font-weight: bold;'>", player, "</span><br>",
               "<span style='font-size: 0.8em; color: gray;'>(", lift_fmt, ")</span>",
@@ -330,7 +345,8 @@ output$deadline_results <- renderDT({
             
           ) |> 
           dplyr::pull(label) |> 
-          paste(collapse = "")
+          unique() |> 
+          paste(collapse = "") 
       }
     ) |> 
     dplyr::ungroup() |> 
@@ -342,7 +358,7 @@ output$deadline_results <- renderDT({
     )
 
   datatable(trade_comparison, 
-            options = list(pageLength = 30, autoWidth = TRUE), 
+            options = list(paging = FALSE, autoWidth = TRUE), 
             rownames = FALSE, 
             escape = FALSE)
 })
@@ -354,15 +370,16 @@ output$deadline_results <- renderDT({
       select(team_abbr, category, weighted_need) |>
       pivot_wider(names_from = category, values_from = weighted_need) |>
       select(-team_abbr) |> 
-      correlate(quiet = TRUE)
+      correlate()
   })
   
   # FIXED CORRELATION PLOT: Upper Triangular Heatmap Tiles
-  output$cor_plot <- renderPlot({
+  output$cor_plot <- renderPlotly({
     cd <- cor_data()
     
+    print(cor_data)
     # Human-readable labels for the plot
-    cat_map <- c("z_off" = "Offense", "z_perim" = "Perim Def", "z_inter" = "Inter Def", 
+    cat_map <- c("z_off" = "Offense", "z_perim" = "Perim Def", "z_int" = "Inter Def", 
                  "z_reb" = "Rebounding", "z_3pt" = "3PT", "z_ast" = "PG Play")
     
     long_cor <- cd |> 
@@ -375,19 +392,48 @@ output$deadline_results <- renderDT({
       # Filter for Upper Triangular logic (Row index < Col index)
       filter(as.numeric(term) < as.numeric(variable))
     
-    ggplot(long_cor, aes(x = variable, y = term, fill = correlation)) +
-      geom_tile(color = "white") +
-      geom_text(aes(label = sprintf("%.2f", correlation)), color = "black", size = 4) +
-      scale_fill_gradient2(low = "#e67e22", mid = "white", high = "#2ecc71", 
-                           midpoint = 0, limit = c(-1, 1), name="Correlation") +
-      theme_minimal() +
-      theme(
-        axis.title = element_blank(),
-        panel.grid = element_blank(),
-        axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1),
-        legend.position = "right"
-      ) +
-      coord_fixed()
+    # p <- ggplot(long_cor, aes(x = variable, y = term, fill = correlation)) +
+    #   geom_tile(color = "white") +
+    #   geom_text(aes(label = sprintf("%.2f", correlation)), color = "black", size = 4) +
+    #   scale_fill_gradient2(low = "#e67e22", mid = "white", high = "#2ecc71", 
+    #                        midpoint = 0, limit = c(-1, 1), name="Correlation") +
+    #   theme_minimal() +
+    #   theme(
+    #     axis.title = element_blank(),
+    #     panel.grid = element_blank(),
+    #     axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1),
+    #     legend.position = "right"
+    #   ) +
+    #   coord_fixed()  
+    
+    cor_colorscale <- list(
+      list(0, "#e67e22"), 
+      list(0.5, "#ffffff"), 
+      list(1, "#2ecc71")
+    )
+    
+    plot_ly(
+      data = long_cor,
+      x = ~variable,
+      y = ~term,
+      z = ~correlation,
+      type = "heatmap",
+      colorscale = cor_colorscale,
+      zmin = -1,
+      zmax = 1,
+      colorbar = list(title = "Correlation")
+    ) %>%
+      add_annotations(
+        text = ~sprintf("%.2f", correlation),
+        showarrow = FALSE,
+        font = list(color = "black")
+      ) %>%
+      layout(
+        xaxis = list(title = "", tickangle = -45),
+        yaxis = list(title = ""),
+        margin = list(l = 100, b = 100) # Prevents label cutoff
+      )
+  
   })
   
   # THis should be good
